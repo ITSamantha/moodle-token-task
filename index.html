@@ -92,10 +92,14 @@
     .course-total td { font-weight: 700; background: var(--pink-50) !important; }
   </style>
   <script>
-    const MOODLE_ORIGIN = "https://node-server.ru";
+    function normalizeMoodleBase(raw) {
+      let base = (raw || '').trim().replace(/\/+$/, '');
+      if (!/^https?:\/\//i.test(base)) base = 'https://' + base;
+      return base;
+    }
 
-    async function getToken(username, password) {
-      const res = await (await fetch(MOODLE_ORIGIN + "/m/login/token.php?service=moodle_mobile_app", {
+    async function getToken(moodleBase, username, password) {
+      const res = await (await fetch(moodleBase + "/login/token.php?service=moodle_mobile_app", {
         method: "POST",
         headers: { "Content-Type": "application/x-www-form-urlencoded" },
         body: "username=" + encodeURIComponent(username) + "&password=" + encodeURIComponent(password)
@@ -104,8 +108,8 @@
       return res.token;
     }
 
-    async function callApi(token, wsfunction, params) {
-      const url = new URL(MOODLE_ORIGIN + "/m/webservice/rest/server.php");
+    async function callApi(moodleBase, token, wsfunction, params) {
+      const url = new URL(moodleBase + "/webservice/rest/server.php");
       url.searchParams.set("moodlewsrestformat", "json");
       url.searchParams.set("wstoken", token);
       url.searchParams.set("wsfunction", wsfunction);
@@ -121,14 +125,15 @@
       status.textContent = 'Загрузка…';
       out.innerHTML = '';
       try {
+        const moodleBase = normalizeMoodleBase(document.querySelector('#moodleurl').value);
         const username = document.querySelector('#username').value;
         const password = document.querySelector('#password').value;
-        const token = await getToken(username, password);
+        const token = await getToken(moodleBase, username, password);
 
-        const siteInfo = await callApi(token, 'core_webservice_get_site_info');
+        const siteInfo = await callApi(moodleBase, token, 'core_webservice_get_site_info');
         const userid = siteInfo.userid;
 
-        const myCourses = await callApi(token, 'core_enrol_get_users_courses', { userid });
+        const myCourses = await callApi(moodleBase, token, 'core_enrol_get_users_courses', { userid });
         const sortedCourses = myCourses.slice().sort((a, b) => a.fullname.localeCompare(b.fullname, 'ru'));
 
         status.textContent = 'Загрузка оценок по ' + sortedCourses.length + ' курсам…';
@@ -137,7 +142,7 @@
         for (const course of sortedCourses) {
           let data;
           try {
-            data = await callApi(token, 'gradereport_user_get_grade_items', { courseid: course.id, userid });
+            data = await callApi(moodleBase, token, 'gradereport_user_get_grade_items', { courseid: course.id, userid });
           } catch (e) {
             continue; // курс без доступного журнала оценок у этого пользователя
           }
@@ -195,6 +200,7 @@
   <main>
     <h1>Получить отметки студента в курсах</h1>
     <div class="login-card">
+      <label>Адрес Moodle <input id="moodleurl" value="https://node-server.ru/m" placeholder="https://node-server.ru/m"></label>
       <label>Логин <input id="username" autocomplete="username"></label>
       <label>Пароль <input id="password" type="password" autocomplete="current-password"></label>
       <button onclick="getScore()">Поехали ✨</button>
