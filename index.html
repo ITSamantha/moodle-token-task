@@ -58,6 +58,9 @@
       color: var(--ink);
     }
     input:focus { outline: none; border-color: var(--pink-500); box-shadow: 0 0 0 3px var(--pink-100); }
+    input.invalid { border-color: #e24b6b; background: #fff2f4; }
+    .field-error { color: #c7264a; font-size: .78rem; margin-top: .3rem; display: none; }
+    .field-error.show { display: block; }
     button {
       margin-top: 1.1rem;
       padding: .65rem 1.4rem;
@@ -98,6 +101,45 @@
       return base;
     }
 
+    function isValidHttpUrl(raw) {
+      try {
+        const u = new URL(normalizeMoodleBase(raw));
+        return u.protocol === 'https:' || u.protocol === 'http:';
+      } catch {
+        return false;
+      }
+    }
+
+    function setFieldError(inputId, errorId, message) {
+      const input = document.querySelector('#' + inputId);
+      const err = document.querySelector('#' + errorId);
+      if (message) {
+        input.classList.add('invalid');
+        err.textContent = message;
+        err.classList.add('show');
+      } else {
+        input.classList.remove('invalid');
+        err.classList.remove('show');
+      }
+      return !message;
+    }
+
+    function validateForm() {
+      const moodleurl = document.querySelector('#moodleurl').value;
+      const username = document.querySelector('#username').value;
+      const password = document.querySelector('#password').value;
+
+      const urlOk = setFieldError('moodleurl', 'moodleurl-error',
+        !moodleurl.trim() ? 'Укажите адрес Moodle.' :
+        !isValidHttpUrl(moodleurl) ? 'Это не похоже на адрес сайта.' : '');
+      const userOk = setFieldError('username', 'username-error',
+        !username.trim() ? 'Укажите логин.' : '');
+      const passOk = setFieldError('password', 'password-error',
+        !password ? 'Укажите пароль.' : '');
+
+      return urlOk && userOk && passOk;
+    }
+
     async function getToken(moodleBase, username, password) {
       const res = await (await fetch(moodleBase + "/login/token.php?service=moodle_mobile_app", {
         method: "POST",
@@ -122,13 +164,27 @@
     async function getScore() {
       const status = document.querySelector('#status');
       const out = document.querySelector('#output');
-      status.textContent = 'Загрузка…';
       out.innerHTML = '';
+
+      if (!validateForm()) {
+        status.textContent = 'Проверьте поля, выделенные красным.';
+        return;
+      }
+
+      status.textContent = 'Загрузка…';
       try {
         const moodleBase = normalizeMoodleBase(document.querySelector('#moodleurl').value);
         const username = document.querySelector('#username').value;
         const password = document.querySelector('#password').value;
-        const token = await getToken(moodleBase, username, password);
+        let token;
+        try {
+          token = await getToken(moodleBase, username, password);
+        } catch (e) {
+          setFieldError('username', 'username-error', '');
+          setFieldError('password', 'password-error', 'Проверьте логин и пароль.');
+          status.textContent = 'Не удалось войти: ' + e.message;
+          return;
+        }
 
         const siteInfo = await callApi(moodleBase, token, 'core_webservice_get_site_info');
         const userid = siteInfo.userid;
@@ -201,8 +257,11 @@
     <h1>Получить отметки студента в курсах</h1>
     <div class="login-card">
       <label>Адрес Moodle <input id="moodleurl" value="https://node-server.ru/m" placeholder="https://node-server.ru/m"></label>
+      <p class="field-error" id="moodleurl-error"></p>
       <label>Логин <input id="username" autocomplete="username"></label>
+      <p class="field-error" id="username-error"></p>
       <label>Пароль <input id="password" type="password" autocomplete="current-password"></label>
+      <p class="field-error" id="password-error"></p>
       <button onclick="getScore()">Поехали ✨</button>
       <p id="status"></p>
     </div>
