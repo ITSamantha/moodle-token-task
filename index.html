@@ -1,0 +1,98 @@
+<!DOCTYPE html>
+<html lang="ru">
+ <head>
+  <title>Отметки студента по токену</title><meta charset="utf-8">
+  <style>
+    body { font-family: system-ui, sans-serif; max-width: 640px; margin: 2rem auto; padding: 0 1rem; }
+    table { width: 100%; border-collapse: collapse; margin-top: 1rem; }
+    th, td { border: 1px solid #ccc; padding: .5rem .75rem; text-align: left; }
+    th { background: #f2f2f2; }
+    tr:nth-child(even) { background: #fafafa; }
+    .grade { font-weight: 600; }
+    .grade.empty { color: #999; font-weight: 400; }
+    #status { color: #666; margin-top: .5rem; }
+    label { display: block; margin-top: .5rem; }
+    input { padding: .3rem; }
+    button { margin-top: .5rem; padding: .4rem .9rem; }
+  </style>
+  <script>
+    const MOODLE_ORIGIN = "https://node-server.ru";
+
+    async function getToken(username, password) {
+      const res = await (await fetch(MOODLE_ORIGIN + "/m/login/token.php?service=moodle_mobile_app", {
+        method: "POST",
+        headers: { "Content-Type": "application/x-www-form-urlencoded" },
+        body: "username=" + encodeURIComponent(username) + "&password=" + encodeURIComponent(password)
+      })).json();
+      if (res.error) throw new Error(res.error);
+      return res.token;
+    }
+
+    async function callApi(token, wsfunction, params) {
+      const url = new URL(MOODLE_ORIGIN + "/m/webservice/rest/server.php");
+      url.searchParams.set("moodlewsrestformat", "json");
+      url.searchParams.set("wstoken", token);
+      url.searchParams.set("wsfunction", wsfunction);
+      for (const [key, value] of Object.entries(params || {})) url.searchParams.set(key, value);
+      const res = await (await fetch(url)).json();
+      if (res && res.exception) throw new Error(res.message || res.errorcode);
+      return res;
+    }
+
+    async function getScore() {
+      const status = document.querySelector('#status');
+      const table = document.querySelector('#gradesTable');
+      status.textContent = 'Загрузка…';
+      table.innerHTML = '';
+      try {
+        const username = document.querySelector('#username').value;
+        const password = document.querySelector('#password').value;
+        const token = await getToken(username, password);
+
+        const [{ grades }, courses] = await Promise.all([
+          callApi(token, 'gradereport_overview_get_course_grades'),
+          callApi(token, 'core_course_get_courses_by_field')
+        ]);
+
+        const nameById = new Map(
+          (courses.courses || []).map(c => [c.id, c.fullname || c.shortname])
+        );
+
+        const rows = grades
+          .map(g => ({
+            name: nameById.get(g.courseid) || ('Курс #' + g.courseid),
+            grade: g.grade
+          }))
+          .sort((a, b) => a.name.localeCompare(b.name, 'ru'));
+
+        table.innerHTML =
+          '<thead><tr><th>Курс</th><th>Оценка</th></tr></thead><tbody>' +
+          rows.map(r => {
+            const isEmpty = r.grade === '-' || r.grade === null || r.grade === undefined;
+            return '<tr><td>' + escapeHtml(r.name) + '</td>' +
+              '<td class="grade' + (isEmpty ? ' empty' : '') + '">' + escapeHtml(r.grade ?? '—') + '</td></tr>';
+          }).join('') +
+          '</tbody>';
+
+        status.textContent = 'Готово. Курсов: ' + rows.length + '.';
+      } catch (err) {
+        status.textContent = 'Ошибка: ' + err.message;
+      }
+    }
+
+    function escapeHtml(s) {
+      return String(s).replace(/[&<>"']/g, c => ({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;' }[c]));
+    }
+  </script>
+ </head>
+ <body>
+  <main>
+    <h1>Получить отметки студента в курсах</h1>
+    <label>Логин <input id="username" autocomplete="username"></label>
+    <label>Пароль <input id="password" type="password" autocomplete="current-password"></label>
+    <button onclick="getScore()">Поехали</button>
+    <p id="status"></p>
+    <table id="gradesTable"></table>
+  </main>
+ </body>
+</html>
