@@ -3,9 +3,10 @@
  <head>
   <title>Отметки студента по токену</title><meta charset="utf-8">
   <style>
-    body { font-family: system-ui, sans-serif; max-width: 640px; margin: 2rem auto; padding: 0 1rem; }
-    table { width: 100%; border-collapse: collapse; margin-top: 1rem; }
-    th, td { border: 1px solid #ccc; padding: .5rem .75rem; text-align: left; }
+    body { font-family: system-ui, sans-serif; max-width: 760px; margin: 2rem auto; padding: 0 1rem; }
+    h2 { margin-top: 2rem; border-bottom: 2px solid #eee; padding-bottom: .3rem; }
+    table { width: 100%; border-collapse: collapse; margin-top: .5rem; }
+    th, td { border: 1px solid #ccc; padding: .4rem .7rem; text-align: left; font-size: .95rem; }
     th { background: #f2f2f2; }
     tr:nth-child(even) { background: #fafafa; }
     .grade { font-weight: 600; }
@@ -14,6 +15,7 @@
     label { display: block; margin-top: .5rem; }
     input { padding: .3rem; }
     button { margin-top: .5rem; padding: .4rem .9rem; }
+    .course-total { font-weight: 700; background: #eef5ff; }
   </style>
   <script>
     const MOODLE_ORIGIN = "https://node-server.ru";
@@ -41,40 +43,70 @@
 
     async function getScore() {
       const status = document.querySelector('#status');
-      const table = document.querySelector('#gradesTable');
+      const out = document.querySelector('#output');
       status.textContent = 'Загрузка…';
-      table.innerHTML = '';
+      out.innerHTML = '';
       try {
         const username = document.querySelector('#username').value;
         const password = document.querySelector('#password').value;
         const token = await getToken(username, password);
 
-        const [{ grades }, courses] = await Promise.all([
-          callApi(token, 'gradereport_overview_get_course_grades'),
-          callApi(token, 'core_course_get_courses_by_field')
-        ]);
+        const siteInfo = await callApi(token, 'core_webservice_get_site_info');
+        const userid = siteInfo.userid;
 
-        const nameById = new Map(
-          (courses.courses || []).map(c => [c.id, c.fullname || c.shortname])
-        );
+        const myCourses = await callApi(token, 'core_enrol_get_users_courses', { userid });
+        const sortedCourses = myCourses.slice().sort((a, b) => a.fullname.localeCompare(b.fullname, 'ru'));
 
-        const rows = grades
-          .map(g => ({
-            name: nameById.get(g.courseid) || ('Курс #' + g.courseid),
-            grade: g.grade
-          }))
-          .sort((a, b) => a.name.localeCompare(b.name, 'ru'));
+        status.textContent = 'Загрузка оценок по ' + sortedCourses.length + ' курсам…';
 
-        table.innerHTML =
-          '<thead><tr><th>Курс</th><th>Оценка</th></tr></thead><tbody>' +
-          rows.map(r => {
-            const isEmpty = r.grade === '-' || r.grade === null || r.grade === undefined;
-            return '<tr><td>' + escapeHtml(r.name) + '</td>' +
-              '<td class="grade' + (isEmpty ? ' empty' : '') + '">' + escapeHtml(r.grade ?? '—') + '</td></tr>';
-          }).join('') +
-          '</tbody>';
+        let totalItems = 0;
+        for (const course of sortedCourses) {
+          let data;
+          try {
+            data = await callApi(token, 'gradereport_user_get_grade_items', { courseid: course.id, userid });
+          } catch (e) {
+            continue; // курс без доступного журнала оценок у этого пользователя
+          }
+          const ug = data.usergrades && data.usergrades[0];
+          if (!ug) continue;
 
-        status.textContent = 'Готово. Курсов: ' + rows.length + '.';
+          const items = ug.gradeitems.filter(gi => gi.itemtype === 'mod');
+          const courseTotal = ug.gradeitems.find(gi => gi.itemtype === 'course');
+          if (!items.length && (!courseTotal || courseTotal.gradeformatted === '-')) continue;
+
+          totalItems += items.length;
+          const section = document.createElement('section');
+          const h2 = document.createElement('h2');
+          h2.textContent = escapeHtml(course.fullname);
+          section.append(h2);
+
+          const table = document.createElement('table');
+          table.innerHTML = '<thead><tr><th>Задание</th><th>Оценка</th><th>Диапазон</th></tr></thead>';
+          const tbody = document.createElement('tbody');
+          for (const gi of items) {
+            const tr = document.createElement('tr');
+            const isEmpty = gi.gradeformatted === '-' || gi.gradeformatted == null;
+            tr.innerHTML = '<td>' + escapeHtml(gi.itemname || '(без названия)') + '</td>' +
+              '<td class="grade' + (isEmpty ? ' empty' : '') + '">' + escapeHtml(gi.gradeformatted ?? '—') + '</td>' +
+              '<td>' + escapeHtml((gi.rangeformatted || '').replace('&ndash;', '-')) + '</td>';
+            tbody.append(tr);
+          }
+          if (courseTotal) {
+            const tr = document.createElement('tr');
+            tr.className = 'course-total';
+            tr.innerHTML = '<td>Итог по курсу</td>' +
+              '<td class="grade">' + escapeHtml(courseTotal.gradeformatted ?? '—') + '</td>' +
+              '<td>' + escapeHtml((courseTotal.rangeformatted || '').replace('&ndash;', '-')) + '</td>';
+            tbody.append(tr);
+          }
+          table.append(tbody);
+          section.append(table);
+          out.append(section);
+        }
+
+        status.textContent = out.children.length
+          ? 'Готово. Курсов с заданиями: ' + out.children.length + ', элементов оценивания: ' + totalItems + '.'
+          : 'Готово. Ни в одном курсе нет доступных элементов оценивания с результатом.';
       } catch (err) {
         status.textContent = 'Ошибка: ' + err.message;
       }
@@ -92,7 +124,7 @@
     <label>Пароль <input id="password" type="password" autocomplete="current-password"></label>
     <button onclick="getScore()">Поехали</button>
     <p id="status"></p>
-    <table id="gradesTable"></table>
+    <div id="output"></div>
   </main>
  </body>
 </html>
